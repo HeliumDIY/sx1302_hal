@@ -1262,7 +1262,7 @@ int main(int argc, char ** argv)
     float dw_ack_ratio;
 
     /* Parse command line options */
-    while( (i = getopt( argc, argv, "hc:" )) != -1 )
+    while( (i = getopt( argc, argv, "hco:" )) != -1 )
     {
         switch( i )
         {

@@ -76,7 +76,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #endif
 
 #define JSON_CONF_DEFAULT   "global_conf.json"
-
+#define JSON_CONF_OVERRIDE  "local_conf.json"
 #define DEFAULT_SERVER      127.0.0.1   /* hostname also supported */
 #define DEFAULT_PORT_UP     1780
 #define DEFAULT_PORT_DW     1782
@@ -254,11 +254,11 @@ static void usage(void);
 
 static void sig_handler(int sigio);
 
-static int parse_SX130x_configuration(const char * conf_file);
+static int parse_SX130x_configuration(const char * conf_file, bool override);
 
-static int parse_gateway_configuration(const char * conf_file);
+static int parse_gateway_configuration(const char * conf_file, bool override);
 
-static int parse_debug_configuration(const char * conf_file);
+static int parse_debug_configuration(const char * conf_file, bool override);
 
 static uint16_t crc16(const uint8_t * data, unsigned size);
 
@@ -304,7 +304,7 @@ static void sig_handler(int sigio) {
     return;
 }
 
-static int parse_SX130x_configuration(const char * conf_file) {
+static int parse_SX130x_configuration(const char * conf_file, bool override ) {
     int i, j;
     char param_name[32]; /* used to generate variable parameter names */
     const char *str; /* used to store string value from JSON object */
@@ -325,7 +325,7 @@ static int parse_SX130x_configuration(const char * conf_file) {
 
     /* try to parse JSON */
     root_val = json_parse_file_with_comments(conf_file);
-    if (root_val == NULL) {
+    if (root_val == NULL && override == false) {
         MSG("ERROR: %s is not a valid JSON file\n", conf_file);
         exit(EXIT_FAILURE);
     }
@@ -758,7 +758,7 @@ static int parse_SX130x_configuration(const char * conf_file) {
     return 0;
 }
 
-static int parse_gateway_configuration(const char * conf_file) {
+static int parse_gateway_configuration(const char * conf_file, bool override) {
     const char conf_obj_name[] = "gateway_conf";
     JSON_Value *root_val;
     JSON_Object *conf_obj = NULL;
@@ -768,7 +768,7 @@ static int parse_gateway_configuration(const char * conf_file) {
 
     /* try to parse JSON */
     root_val = json_parse_file_with_comments(conf_file);
-    if (root_val == NULL) {
+    if (root_val == NULL && override == false) {
         MSG("ERROR: %s is not a valid JSON file\n", conf_file);
         exit(EXIT_FAILURE);
     }
@@ -866,6 +866,13 @@ static int parse_gateway_configuration(const char * conf_file) {
         gps_dev_path[sizeof gps_dev_path - 1] = '\0'; /* ensure string termination */
         gps_dev = gps_dev_i2c;
         MSG("INFO: GPS I2C path is configured to \"%s\"\n", gps_dev_path);
+    }
+
+    if (override == true) {
+        if (strlen(gps_dev_tty) > 0 && strlen(gps_dev_i2c) > 0) {
+            MSG("ERROR: 'gps_i2c_path' and 'gps_tty_path' are mutually exclusive, pick only one\n");
+            exit(EXIT_FAILURE);
+        }
     }
 
     /* get reference coordinates */
@@ -969,7 +976,7 @@ static int parse_gateway_configuration(const char * conf_file) {
     return 0;
 }
 
-static int parse_debug_configuration(const char * conf_file) {
+static int parse_debug_configuration(const char * conf_file, bool override) {
     int i;
     const char conf_obj_name[] = "debug_conf";
     JSON_Value *root_val;
@@ -983,7 +990,7 @@ static int parse_debug_configuration(const char * conf_file) {
 
     /* try to parse JSON */
     root_val = json_parse_file_with_comments(conf_file);
-    if (root_val == NULL) {
+    if (root_val == NULL && override == false) {
         MSG("ERROR: %s is not a valid JSON file\n", conf_file);
         exit(EXIT_FAILURE);
     }
@@ -1192,6 +1199,9 @@ int main(int argc, char ** argv)
     const char defaut_conf_fname[] = JSON_CONF_DEFAULT;
     const char * conf_fname = defaut_conf_fname; /* pointer to a string we won't touch */
 
+    const char override_conf_fname[] = JSON_CONF_OVERRIDE;
+    const char * conf_override_fname = override_conf_fname; /* pointer to a string we won't touch */
+
     /* threads */
     pthread_t thrid_up;
     pthread_t thrid_down;
@@ -1265,6 +1275,10 @@ int main(int argc, char ** argv)
             conf_fname = optarg;
             break;
 
+        case 'o':
+            conf_override_fname = optarg;
+            break;
+
         default:
             printf( "ERROR: argument parsing options, use -h option for help\n" );
             usage( );
@@ -1288,21 +1302,39 @@ int main(int argc, char ** argv)
     /* load configuration files */
     if (access(conf_fname, R_OK) == 0) { /* if there is a global conf, parse it  */
         MSG("INFO: found configuration file %s, parsing it\n", conf_fname);
-        x = parse_SX130x_configuration(conf_fname);
+        x = parse_SX130x_configuration(conf_fname, false);
         if (x != 0) {
             exit(EXIT_FAILURE);
         }
-        x = parse_gateway_configuration(conf_fname);
+        x = parse_gateway_configuration(conf_fname, false);
         if (x != 0) {
             exit(EXIT_FAILURE);
         }
-        x = parse_debug_configuration(conf_fname);
+        x = parse_debug_configuration(conf_fname, false);
         if (x != 0) {
             MSG("INFO: no debug configuration\n");
         }
     } else {
         MSG("ERROR: [main] failed to find any configuration file named %s\n", conf_fname);
         exit(EXIT_FAILURE);
+    }
+
+    if (access(conf_override_fname, R_OK) == 0) { /* if there is a global conf, parse it  */
+        MSG("INFO: override global_conf with %s, parsing it\n", conf_override_fname);
+        x = parse_SX130x_configuration(conf_override_fname, true);
+        if (x != 0) {
+            MSG("INFO: no concentrator configuration\n");
+        }
+        x = parse_gateway_configuration(conf_override_fname, true);
+        if (x != 0) {
+            MSG("INFO: no gateway configuration\n");
+        }
+        x = parse_debug_configuration(conf_override_fname, true);
+        if (x != 0) {
+            MSG("INFO: no debug configuration\n");
+        }
+    } else {
+        MSG("INFO: [main] No override config supplied. %s\n", conf_override_fname);
     }
 
     /* Start GPS a.s.a.p., to allow it to lock */

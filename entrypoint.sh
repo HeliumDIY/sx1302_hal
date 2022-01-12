@@ -52,4 +52,10 @@ if [ ! -f /opt/packet_forwarder/reset_lgw.sh ]; then
 fi
 
 # run the packet forwarder
-/opt/packet_forwarder/lora_pkt_fwd -c $CONFIG_FILE
+if [[ -z "${OVERRIDE_CONFIG_FILE}" ]]; then
+  echo "No Override Config File supplied, assuming default config file for your location"
+  /opt/packet_forwarder/lora_pkt_fwd -c $CONFIG_FILE
+else
+  echo "Overriding values from Config File supplied with $OVERRIDE_CONFIG_FILE"
+  /opt/packet_forwarder/lora_pkt_fwd -c $CONFIG_FILE -o $OVERRIDE_CONFIG_FILE
+fi

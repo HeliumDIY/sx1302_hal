@@ -109,8 +109,8 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #define STD_FSK_PREAMB  5
 
 #define STATUS_SIZE     200
-#define TX_BUFF_SIZE    ((540 * NB_PKT_MAX) + 30 + STATUS_SIZE)
-#define ACK_BUFF_SIZE   64
+#define TX_BUFF_SIZE    ((560 * NB_PKT_MAX) + 30 + STATUS_SIZE)
+#define ACK_BUFF_SIZE   80
 
 #define UNIX_GPS_EPOCH_OFFSET 315964800 /* Number of seconds ellapsed between 01.Jan.1970 00:00:00
                                                                           and 06.Jan.1980 00:00:00 */
@@ -1067,8 +1067,8 @@ static double difftimespec(struct timespec end, struct timespec beginning) {
     return x;
 }
 
-static int send_tx_ack(uint8_t token_h, uint8_t token_l, enum jit_error_e error, int32_t error_value) {
-    uint8_t buff_ack[ACK_BUFF_SIZE]; /* buffer to give feedback to server */
+static int send_tx_ack(uint8_t token_h, uint8_t token_l, enum jit_error_e error, int32_t error_value, uint32_t timestamp_sent) {
+    uint8_t buff_ack[ACK_BUFF_SIZE]; /* buffer to give feedback to server, max used: 70 */
     int buff_index;
     int j;
 
@@ -1084,95 +1084,100 @@ static int send_tx_ack(uint8_t token_h, uint8_t token_l, enum jit_error_e error,
     *(uint32_t *)(buff_ack + 8) = net_mac_l;
     buff_index = 12; /* 12-byte header */
 
-    /* Put no JSON string if there is nothing to report */
-    if (error != JIT_ERROR_OK) {
-        /* start of JSON structure */
-        memcpy((void *)(buff_ack + buff_index), (void *)"{\"txpk_ack\":{", 13);
-        buff_index += 13;
-        /* set downlink error/warning status in JSON structure */
-        switch( error ) {
-            case JIT_ERROR_TX_POWER:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"warn\":", 7);
-                buff_index += 7;
-                break;
-            default:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"error\":", 8);
-                buff_index += 8;
-                break;
-        }
-        /* set error/warning type in JSON structure */
-        switch (error) {
-            case JIT_ERROR_FULL:
-            case JIT_ERROR_COLLISION_PACKET:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"COLLISION_PACKET\"", 18);
-                buff_index += 18;
-                /* update stats */
-                pthread_mutex_lock(&mx_meas_dw);
-                meas_nb_tx_rejected_collision_packet += 1;
-                pthread_mutex_unlock(&mx_meas_dw);
-                break;
-            case JIT_ERROR_TOO_LATE:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"TOO_LATE\"", 10);
-                buff_index += 10;
-                /* update stats */
-                pthread_mutex_lock(&mx_meas_dw);
-                meas_nb_tx_rejected_too_late += 1;
-                pthread_mutex_unlock(&mx_meas_dw);
-                break;
-            case JIT_ERROR_TOO_EARLY:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"TOO_EARLY\"", 11);
-                buff_index += 11;
-                /* update stats */
-                pthread_mutex_lock(&mx_meas_dw);
-                meas_nb_tx_rejected_too_early += 1;
-                pthread_mutex_unlock(&mx_meas_dw);
-                break;
-            case JIT_ERROR_COLLISION_BEACON:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"COLLISION_BEACON\"", 18);
-                buff_index += 18;
-                /* update stats */
-                pthread_mutex_lock(&mx_meas_dw);
-                meas_nb_tx_rejected_collision_beacon += 1;
-                pthread_mutex_unlock(&mx_meas_dw);
-                break;
-            case JIT_ERROR_TX_FREQ:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"TX_FREQ\"", 9);
-                buff_index += 9;
-                break;
-            case JIT_ERROR_TX_POWER:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"TX_POWER\"", 10);
-                buff_index += 10;
-                break;
-            case JIT_ERROR_GPS_UNLOCKED:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"GPS_UNLOCKED\"", 14);
-                buff_index += 14;
-                break;
-            default:
-                memcpy((void *)(buff_ack + buff_index), (void *)"\"UNKNOWN\"", 9);
-                buff_index += 9;
-                break;
-        }
-        /* set error/warning details in JSON structure */
-        switch (error) {
-            case JIT_ERROR_TX_POWER:
-                j = snprintf((char *)(buff_ack + buff_index), ACK_BUFF_SIZE-buff_index, ",\"value\":%d", error_value);
-                if (j > 0) {
-                    buff_index += j;
-                } else {
-                    MSG("ERROR: [up] snprintf failed line %u\n", (__LINE__ - 4));
-                    exit(EXIT_FAILURE);
-                }
-                break;
-            default:
-                /* Do nothing */
-                break;
-        }
-        /* end of JSON structure */
-        memcpy((void *)(buff_ack + buff_index), (void *)"}}", 2);
-        buff_index += 2;
+    /* start of JSON structure */
+    memcpy((void *)(buff_ack + buff_index), (void *)"{\"txpk_ack\":{", 13);
+    buff_index += 13;
+
+    /* set downlink error/warning status in JSON structure */
+    switch( error ) {
+        case JIT_ERROR_TX_POWER:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"warn\":", 7);
+            buff_index += 7;
+            break;
+        case JIT_ERROR_OK: /* Yes, "OK" is an error to report. */
+        default:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"error\":", 8);
+            buff_index += 8;
+            break;
+    }
+    /* set error/warning type in JSON structure */
+    switch (error) {
+        case JIT_ERROR_FULL:
+        case JIT_ERROR_COLLISION_PACKET:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"COLLISION_PACKET\"", 18);
+            buff_index += 18;
+            /* update stats */
+            pthread_mutex_lock(&mx_meas_dw);
+            meas_nb_tx_rejected_collision_packet += 1;
+            pthread_mutex_unlock(&mx_meas_dw);
+            break;
+        case JIT_ERROR_TOO_LATE:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"TOO_LATE\"", 10);
+            buff_index += 10;
+            /* update stats */
+            pthread_mutex_lock(&mx_meas_dw);
+            meas_nb_tx_rejected_too_late += 1;
+            pthread_mutex_unlock(&mx_meas_dw);
+            break;
+        case JIT_ERROR_TOO_EARLY:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"TOO_EARLY\"", 11);
+            buff_index += 11;
+            /* update stats */
+            pthread_mutex_lock(&mx_meas_dw);
+            meas_nb_tx_rejected_too_early += 1;
+            pthread_mutex_unlock(&mx_meas_dw);
+            break;
+        case JIT_ERROR_COLLISION_BEACON:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"COLLISION_BEACON\"", 18);
+            buff_index += 18;
+            /* update stats */
+            pthread_mutex_lock(&mx_meas_dw);
+            meas_nb_tx_rejected_collision_beacon += 1;
+            pthread_mutex_unlock(&mx_meas_dw);
+            break;
+        case JIT_ERROR_TX_FREQ:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"TX_FREQ\"", 9);
+            buff_index += 9;
+            break;
+        case JIT_ERROR_TX_POWER:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"TX_POWER\"", 10);
+            buff_index += 10;
+            j = snprintf((char *)(buff_ack + buff_index), ACK_BUFF_SIZE-buff_index, ",\"value\":%d", error_value);
+            if (j > 0) {
+                buff_index += j;
+            } else {
+                MSG("ERROR: [up] snprintf failed line %u\n", (__LINE__ - 4));
+                exit(EXIT_FAILURE);
+            }
+            break;
+        case JIT_ERROR_GPS_UNLOCKED:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"GPS_UNLOCKED\"", 14);
+            buff_index += 14;
+            break;
+        case JIT_ERROR_OK:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"NONE\"", 6);
+            buff_index += 6;
+            break;
+        default:
+            memcpy((void *)(buff_ack + buff_index), (void *)"\"UNKNOWN\"", 9);
+            buff_index += 9;
+            break;
     }
 
-    buff_ack[buff_index] = 0; /* add string terminator, for safety */
+    /* If anything was transmitted, report transmit timestamp */
+    if (error == JIT_ERROR_OK || error == JIT_ERROR_TX_POWER) {
+        j = snprintf((char *)(buff_ack + buff_index), ACK_BUFF_SIZE-buff_index, ",\"tmst\":%u", timestamp_sent);
+        if (j > 0) {
+            buff_index += j; /* at most, 17 characters */
+        } else {
+            MSG("ERROR: [up] snprintf failed line %u\n", (__LINE__ - 4));
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    /* end of JSON structure */
+    memcpy((void *)(buff_ack + buff_index), (void *)"}}", 3); /* include nul */
+    buff_index += 2;
 
     /* send datagram to server */
     return send(sock_down, (void *)buff_ack, buff_index, 0);
@@ -1860,8 +1865,8 @@ void thread_up(void) {
                 exit(EXIT_FAILURE);
             }
 
-            /* RAW timestamp, 8-17 useful chars */
-            j = snprintf((char *)(buff_up + buff_index), TX_BUFF_SIZE-buff_index, ",\"tmst\":%u", p->count_us);
+            /* RAW timestamp, 18-36 useful chars */
+            j = snprintf((char *)(buff_up + buff_index), TX_BUFF_SIZE-buff_index, ",\"tmst\":%u,\"tm32\":%u", p->count_us, p->count_32);
             if (j > 0) {
                 buff_index += j;
             } else {
@@ -2650,7 +2655,7 @@ void thread_down(void) {
                             json_value_free(root_val);
 
                             /* send acknoledge datagram to server */
-                            send_tx_ack(buff_down[1], buff_down[2], JIT_ERROR_GPS_UNLOCKED, 0);
+                            send_tx_ack(buff_down[1], buff_down[2], JIT_ERROR_GPS_UNLOCKED, 0, 0);
                             continue;
                         }
                     } else {
@@ -2658,7 +2663,7 @@ void thread_down(void) {
                         json_value_free(root_val);
 
                         /* send acknoledge datagram to server */
-                        send_tx_ack(buff_down[1], buff_down[2], JIT_ERROR_GPS_UNLOCKED, 0);
+                        send_tx_ack(buff_down[1], buff_down[2], JIT_ERROR_GPS_UNLOCKED, 0, 0);
                         continue;
                     }
 
@@ -2920,7 +2925,7 @@ void thread_down(void) {
             }
 
             /* Send acknoledge datagram to server */
-            send_tx_ack(buff_down[1], buff_down[2], jit_result, warning_value);
+            send_tx_ack(buff_down[1], buff_down[2], jit_result, warning_value, txpkt.count_us);
         }
     }
     MSG("\nINFO: End of downstream thread\n");
